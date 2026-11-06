@@ -83,6 +83,8 @@ namespace AnimeStudio.CLI
                 Exporter.ExportModelTextures = !o.NoModelTextures;
 
                 var typeFilterPlan = ConfigureTypeFilters(o);
+                assetsManager.RequestedObjectTypes = typeFilterPlan.AssetSelectionTypes.Length == 0
+                    ? null : new HashSet<ClassIDType>(typeFilterPlan.AssetSelectionTypes);
 
                 assetsManager.Silent = o.Silent;
                 assetsManager.Game = game;
@@ -425,7 +427,8 @@ namespace AnimeStudio.CLI
                 }
                 else
                 {
-                    AssetsHelper.BuildCABMap(inputFiles.GetInputFiles(), o.MapName, o.Input.FullName, game);
+                    AssetsHelper.BuildCABMap(inputFiles.GetInputFiles(), o.MapName, o.Input.FullName, game,
+                        assetsManager.FilterData.Items);
                 }
             }
             if (o.MapOp.HasFlag(MapOpType.AssetMap))
@@ -446,12 +449,14 @@ namespace AnimeStudio.CLI
                 }
                 else
                 {
-                    AssetsHelper.BuildAssetMap(inputFiles.GetInputFiles(), o.MapName, game, o.Output.FullName, o.MapType, typeFilterPlan.AssetSelectionTypes, o.NameFilter, o.ContainerFilter).GetAwaiter().GetResult();
+                    AssetsHelper.BuildAssetMap(inputFiles.GetInputFiles(), o.MapName, game, o.Output.FullName, o.MapType, typeFilterPlan.AssetSelectionTypes, o.NameFilter, o.ContainerFilter,
+                        assetsManager.FilterData.Items).GetAwaiter().GetResult();
                 }
             }
             if (o.MapOp.HasFlag(MapOpType.Both))
             {
-                AssetsHelper.BuildBoth(inputFiles.GetInputFiles(), o.MapName, o.Input.FullName, game, o.Output.FullName, o.MapType, typeFilterPlan.AssetSelectionTypes, o.NameFilter, o.ContainerFilter).GetAwaiter().GetResult();
+                AssetsHelper.BuildBoth(inputFiles.GetInputFiles(), o.MapName, o.Input.FullName, game, o.Output.FullName, o.MapType, typeFilterPlan.AssetSelectionTypes, o.NameFilter, o.ContainerFilter,
+                    assetsManager.FilterData.Items).GetAwaiter().GetResult();
             }
         }
 

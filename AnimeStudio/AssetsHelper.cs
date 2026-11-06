@@ -188,7 +188,8 @@ namespace AnimeStudio
             return files;
         }
 
-        public static void BuildCABMap(string[] files, string mapName, string baseFolder, Game game)
+        public static void BuildCABMap(string[] files, string mapName, string baseFolder, Game game,
+            IEnumerable<AssetsManager.AssetFilterDataItem> filterData = null)
         {
             Logger.Info("Building CABMap...");
             try
@@ -199,6 +200,7 @@ namespace AnimeStudio
                 var collision = 0;
                 BaseFolder = baseFolder;
                 assetsManager.Game = game;
+                assetsManager.SetFilterData(filterData);
                 foreach (var file in LoadFiles(files))
                 {
                     BuildCABMap(file, ref collision);
@@ -211,6 +213,10 @@ namespace AnimeStudio
             catch (Exception e)
             {
                 Logger.Warning($"CABMap was not build, {e}");
+            }
+            finally
+            {
+                assetsManager.SetFilterData(null);
             }
         }
 
@@ -393,13 +399,15 @@ namespace AnimeStudio
             CABsByPath = null;
         } 
 
-        public static async Task BuildAssetMap(string[] files, string mapName, Game game, string savePath, ExportListType exportListType, ClassIDType[] typeFilters = null, Regex[] nameFilters = null, Regex[] containerFilters = null)
+        public static async Task BuildAssetMap(string[] files, string mapName, Game game, string savePath, ExportListType exportListType, ClassIDType[] typeFilters = null, Regex[] nameFilters = null, Regex[] containerFilters = null,
+            IEnumerable<AssetsManager.AssetFilterDataItem> filterData = null)
         {
             Logger.Info("Building AssetMap...");
             try
             {
                 Progress.Reset();
                 assetsManager.Game = game;
+                assetsManager.SetFilterData(filterData);
                 var assets = new List<AssetEntry>();
                 foreach (var file in LoadFiles(files))
                 {
@@ -413,6 +421,10 @@ namespace AnimeStudio
             catch(Exception e)
             {
                 Logger.Warning($"AssetMap was not build, {e}");
+            }
+            finally
+            {
+                assetsManager.SetFilterData(null);
             }
             
         }
@@ -433,7 +445,8 @@ namespace AnimeStudio
                         Logger.Info("Building AssetMap has been cancelled !!");
                         return;
                     }
-                    var objectReader = new ObjectReader(assetsFile.reader, assetsFile, objInfo, assetsManager.Game);
+                    var objectReader = new ObjectReader(assetsFile.reader, assetsFile, objInfo, assetsManager.Game,
+                        typeFilters == null || typeFilters.Length == 0 || typeFilters.Contains((ClassIDType)objInfo.classID));
                     var obj = new Object(objectReader);
                     var asset = new AssetEntry()
                     {
@@ -820,7 +833,8 @@ namespace AnimeStudio
                 }
             });
         }
-        public static async Task BuildBoth(string[] files, string mapName, string baseFolder, Game game, string savePath, ExportListType exportListType, ClassIDType[] typeFilters = null, Regex[] nameFilters = null, Regex[] containerFilters = null)
+        public static async Task BuildBoth(string[] files, string mapName, string baseFolder, Game game, string savePath, ExportListType exportListType, ClassIDType[] typeFilters = null, Regex[] nameFilters = null, Regex[] containerFilters = null,
+            IEnumerable<AssetsManager.AssetFilterDataItem> filterData = null)
         {
             Logger.Info($"Building Both...");
             CABMap.Clear();
@@ -829,18 +843,26 @@ namespace AnimeStudio
             var collision = 0;
             BaseFolder = baseFolder;
             assetsManager.Game = game;
+            assetsManager.SetFilterData(filterData);
             var assets = new List<AssetEntry>();
-            foreach(var file in LoadFiles(files))
+            try
             {
-                BuildCABMap(file, ref collision);
-                BuildAssetMap(file, assets, typeFilters, nameFilters, containerFilters);
+                foreach(var file in LoadFiles(files))
+                {
+                    BuildCABMap(file, ref collision);
+                    BuildAssetMap(file, assets, typeFilters, nameFilters, containerFilters);
+                }
+
+                UpdateContainers(assets, game);
+                DumpCABMap(mapName);
+
+                Logger.Info($"Map build successfully !! {collision} collisions found");
+                await ExportAssetsMap(assets, game, mapName, savePath, exportListType);
             }
-
-            UpdateContainers(assets, game);
-            DumpCABMap(mapName);
-
-            Logger.Info($"Map build successfully !! {collision} collisions found");
-            await ExportAssetsMap(assets, game, mapName, savePath, exportListType);
+            finally
+            {
+                assetsManager.SetFilterData(null);
+            }
         }
     }
 }

@@ -71,6 +71,18 @@ namespace AnimeStudio
         }
 
         public AssetFilterData FilterData = new AssetFilterData { Items = new List<AssetFilterDataItem>() };
+        // Null keeps broad-import diagnostics. Explicit CLI type selections do
+        // not turn unrelated opaque class IDs into failures of the requested types.
+        public ISet<ClassIDType> RequestedObjectTypes;
+
+        public void SetFilterData(IEnumerable<AssetFilterDataItem> items)
+        {
+            var selected = items?.ToList();
+            FilterData.Items.Clear();
+            if (selected != null) FilterData.Items.AddRange(selected);
+            // A different selection can have the same number of rows.
+            FilterDataIndexCount = -1;
+        }
 
         public Dictionary<string, List<long>> OffsetData = new();
         private int FilterDataIndexCount = -1;
@@ -833,7 +845,8 @@ namespace AnimeStudio
                         Logger.Info("Reading assets has been cancelled !!");
                         return;
                     }
-                    var objectReader = new ObjectReader(assetsFile.reader, assetsFile, objectInfo, Game);
+                    var objectReader = new ObjectReader(assetsFile.reader, assetsFile, objectInfo, Game,
+                        RequestedObjectTypes == null || RequestedObjectTypes.Contains((ClassIDType)objectInfo.classID));
                     Object obj;
                     try
                     {
