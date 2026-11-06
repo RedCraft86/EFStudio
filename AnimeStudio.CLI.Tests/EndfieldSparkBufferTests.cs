@@ -8,6 +8,7 @@ internal static class EndfieldSparkBufferTests
     public static void Run()
     {
         TestMinimalRootMap();
+        TestLongMapValues();
         TestTrailingBytesRejected();
         TestInvalidPointerRejected();
         TestNegativeAndOverflowCountsRejected();
@@ -23,6 +24,44 @@ internal static class EndfieldSparkBufferTests
         {
             throw new InvalidOperationException("SparkBuffer minimal root map fixture decoded incorrectly");
         }
+    }
+
+    private static void TestLongMapValues()
+    {
+        var payload = BuildLongMapFixture();
+        var result = EndfieldSparkBuffer.ParseBytes(payload);
+        if (result.Data["-7"]?.ToObject<long>() != long.MinValue ||
+            result.Data["2"]?.ToObject<long>() != long.MaxValue)
+            throw new InvalidOperationException("SparkBuffer Long map values lost signed 64-bit precision");
+        Array.Resize(ref payload, payload.Length - 1);
+        AssertThrows("Int64", () => EndfieldSparkBuffer.ParseBytes(payload));
+        payload = BuildLongMapFixture();
+        Array.Resize(ref payload, payload.Length + 1);
+        payload[^1] = 0xA5;
+        AssertThrows("trailing bytes", () => EndfieldSparkBuffer.ParseBytes(payload));
+    }
+
+    private static byte[] BuildLongMapFixture()
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream, Encoding.UTF8, true);
+        writer.Write(12); // definition offset
+        writer.Write(16); // root offset
+        writer.Write(24); // data offset
+        writer.Write(0); // no bean definitions
+        writer.Write((byte)10); // root Map
+        WriteCString(writer, "Root");
+        writer.Write((byte)2); // Int keys
+        writer.Write((byte)3); // Long values
+        writer.Write(2);
+        writer.Write(0L); writer.Write(0L); // pointer table
+        writer.Write(-7);
+        while ((stream.Position & 7) != 0) writer.Write((byte)0);
+        writer.Write(long.MinValue);
+        writer.Write(2);
+        while ((stream.Position & 7) != 0) writer.Write((byte)0);
+        writer.Write(long.MaxValue);
+        return stream.ToArray();
     }
 
     private static void TestTrailingBytesRejected()

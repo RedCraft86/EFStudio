@@ -398,6 +398,7 @@ namespace AnimeStudio.Endfield
                     true) ?? JValue.CreateNull(),
                 SparkType.String => new JValue(reader.ReadStringAtOffset()),
                 SparkType.Int => new JValue(reader.ReadInt32LittleEndian()),
+                SparkType.Long => new JValue(reader.ReadAlignedInt64()),
                 SparkType.Float => FloatValue(reader.ReadSingleLittleEndian()),
                 SparkType.Enum => new JValue(registry.GetEnum(typeHash ?? throw new EndfieldSparkBufferException("map enum value missing type hash")).GetName(reader.ReadInt32LittleEndian())),
                 SparkType.Bool => ReadMapBoolValue(reader),
