@@ -70,7 +70,7 @@ namespace AnimeStudio.CLI
                         RunVfsInnerAudit(ParseVfsOptions(args, "./vfs_inner_audit_ledger.jsonl.gz"));
                         return true;
                     case "audio":
-                        EndfieldAudioCli.Run(args);
+                        exitCode = EndfieldAudioCli.Run(args);
                         return true;
                     case "audio-audit":
                         exitCode = EndfieldAudioCli.RunAudit(args);

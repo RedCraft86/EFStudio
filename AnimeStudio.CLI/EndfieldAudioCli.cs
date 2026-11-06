@@ -658,7 +658,7 @@ namespace AnimeStudio.CLI
             return failures == 0 ? 0 : 1;
         }
 
-        public static void Run(string[] args)
+        public static int Run(string[] args)
         {
             var options = ParseOptions(args);
             var loader = new EndfieldVfsLoader(options.StreamingAssets, options.FallbackAssets);
@@ -679,26 +679,41 @@ namespace AnimeStudio.CLI
             var totalErrors = 0;
             var totalUnmapped = 0;
             var totalPluginMedia = 0;
-            var totalDuplicatePathUnavailablePackages = 0;
+            var totalUninstalledAuditPackages = 0;
             var totalPackageErrors = 0;
 
             foreach (var language in options.Languages)
             {
                 var audioMap = EndfieldAudioMap.FromAudioDialog(audioDialog, language);
-                var processedPckNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 Console.WriteLine($"  Found {audioMap.Count} {language.Name()} audio entries");
 
                 foreach (var blockType in options.BlockTypes(language))
                 {
                     Console.WriteLine($"Extracting {language.Name()} audio files from {blockType.GetName()}...");
                     List<(EndfieldVfsChunkInfo chunk, EndfieldVfsFileInfo file)> pckFiles;
+                    EndfieldVfsBlockMainInfo blockInfo;
                     try
                     {
-                        pckFiles = ExtractPckFiles(loader, blockType);
+                        blockInfo = loader.LoadBlockInfo(blockType);
+                        pckFiles = ExtractPckFiles(blockInfo);
                     }
-                    catch (EndfieldVfsException)
+                    catch (EndfieldVfsBlockNotFoundException) when (options.BlockMode == AudioBlockMode.All)
                     {
-                        Console.WriteLine($"  Skip: No PCK files found in {blockType.GetName()}");
+                        Console.WriteLine($"  Skip: block {blockType.GetName()} is not installed");
+                        continue;
+                    }
+
+                    if (blockType == EndfieldVfsBlockType.AuditAudio && blockInfo.Chunks.Count > 0
+                        && blockInfo.Chunks.All(chunk => IsChunkMissing(loader, blockType, chunk)))
+                    {
+                        Console.WriteLine(
+                            $"  Uninstalled AuditAudio: {pckFiles.Count} PCK declarations; all chunks are absent in both roots"
+                        );
+                        totalUninstalledAuditPackages += pckFiles.Count;
+                        if (options.BlockMode != AudioBlockMode.All)
+                        {
+                            totalPackageErrors++;
+                        }
                         continue;
                     }
 
@@ -718,16 +733,8 @@ namespace AnimeStudio.CLI
                         {
                             // Extract one PCK at a time instead of retaining every
                             // package in the block during the full conversion pass.
-                            var pckData = loader.ExtractFileToBytes(blockType, chunk, file);
+                            var pckData = loader.ExtractFileToBytes(blockType, chunk, file, verifyMd5: true);
                             package = EndfieldAkpkPackage.Parse(pckData);
-                        }
-                        catch (EndfieldVfsChunkNotFoundException e) when (processedPckNames.Contains(pckName))
-                        {
-                            Console.WriteLine(
-                                $"    Skip: {e.Message}; the same logical PCK path was already processed from an earlier block"
-                            );
-                            totalDuplicatePathUnavailablePackages++;
-                            continue;
                         }
                         catch (Exception e)
                         {
@@ -735,7 +742,6 @@ namespace AnimeStudio.CLI
                             totalPackageErrors++;
                             continue;
                         }
-                        processedPckNames.Add(pckName);
 
                         var successCount = 0;
                         var errorCount = 0;
@@ -829,9 +835,13 @@ namespace AnimeStudio.CLI
             Console.WriteLine(
                 $"Complete: Extracted {totalSuccess} files ({totalUnmapped} unmapped, " +
                 $"{totalPluginMedia} Wwise FX plugin-media entries skipped, " +
-                $"{totalDuplicatePathUnavailablePackages} duplicate-path packages unavailable, " +
+                $"{totalUninstalledAuditPackages} uninstalled AuditAudio packages, " +
                 $"{totalPackageErrors + totalErrors} errors)"
             );
+            if (totalPackageErrors != 0 || totalErrors != 0)
+            {
+                return 1;
+            }
             if (!string.IsNullOrEmpty(options.SourceManifest))
             {
                 var parent = Path.GetDirectoryName(Path.GetFullPath(options.SourceManifest));
@@ -840,6 +850,7 @@ namespace AnimeStudio.CLI
                     .OrderBy(row => row.Key, StringComparer.OrdinalIgnoreCase)
                     .Select(row => new { path = row.Key, sourceBank = row.Value.SourceBank, block = row.Value.Block })));
             }
+            return 0;
         }
 
         public static void PrintHelp()
