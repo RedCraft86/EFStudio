@@ -47,6 +47,7 @@ namespace AnimeStudio.CLI
                 optionsBinder.RendererIndexJsonl,
                 optionsBinder.ExportManifestJsonl,
                 optionsBinder.DocumentStore,
+                optionsBinder.DocumentStoreRoot,
                 optionsBinder.SpriteImages,
                 optionsBinder.CabMapDir,
                 optionsBinder.FallbackCabMap,
@@ -99,6 +100,7 @@ namespace AnimeStudio.CLI
         public FileInfo RendererIndexJsonl { get; set; }
         public FileInfo ExportManifestJsonl { get; set; }
         public FileInfo DocumentStore { get; set; }
+        public DirectoryInfo DocumentStoreRoot { get; set; }
         public FileInfo SpriteImages { get; set; }
         public DirectoryInfo CabMapDir { get; set; }
         public FileInfo FallbackCabMap { get; set; }
@@ -140,6 +142,7 @@ namespace AnimeStudio.CLI
         public readonly Option<FileInfo> RendererIndexJsonl;
         public readonly Option<FileInfo> ExportManifestJsonl;
         public readonly Option<FileInfo> DocumentStore;
+        public readonly Option<DirectoryInfo> DocumentStoreRoot;
         public readonly Option<FileInfo> SpriteImages;
         public readonly Option<DirectoryInfo> CabMapDir;
         public readonly Option<FileInfo> FallbackCabMap;
@@ -194,7 +197,8 @@ namespace AnimeStudio.CLI
             FallbackCabMap = new Option<FileInfo>("--fallback_cab_map", "CABMap used only for CAB names absent from the primary map; retains each map's source root.").LegalFilePathsOnly();
             DependencyFiles = new Option<FileInfo[]>("--dependency_files", "Explicit serialized files loaded only as dependencies, including with filter_data; never select their objects for export.") { AllowMultipleArgumentsPerToken = true };
             ExportManifestJsonl = new Option<FileInfo>("--export_manifest_jsonl", "Write one JSONL row per exported path with the serialized file, VFS chunk, and bundle offset that produced it.");
-            DocumentStore = new Option<FileInfo>("--document_store", "Write JSON or Convert target .json/.anim documents as rows of this SQLite file (endfield.unity-object-store.v1, keyed by type folder and file name) instead of loose files; media stays on disk. The file is replaced when the export completes.");
+            DocumentStoreRoot = new Option<DirectoryInfo>("--document_store_root", "Common output root for full relative JSON/raw row keys. Requires --document_store. No loose object files are created.");
+            DocumentStore = new Option<FileInfo>("--document_store", "Write JSON, Raw or Convert target .json/.dat/.anim documents as rows of this SQLite file (endfield.unity-object-store.v1, keyed by type folder and file name) instead of loose files; media stays on disk. The file is replaced when the export completes.");
             SpriteImages = new Option<FileInfo>("--sprite_images", "Convert target: also write AnimeStudio's own image of every exported Sprite as a PNG row of this SQLite file (endfield.sprite-image-store.v1), and check that each Sprite crop document reproduces it; the counts and first mismatches are its meta row 'spriteCheck'.");
             FilterDataFile = new Option<FileInfo>("--filter_data", "Path to a JSON file of {Source, Offset, Name, PathID, Type} items used to load only specific bundle offsets within input chk/blk files.").LegalFilePathsOnly();
             Texture2DNativePayload = new Option<bool>(
@@ -366,6 +370,7 @@ namespace AnimeStudio.CLI
             RendererIndexJsonl = bindingContext.ParseResult.GetValueForOption(RendererIndexJsonl),
             ExportManifestJsonl = bindingContext.ParseResult.GetValueForOption(ExportManifestJsonl),
             DocumentStore = bindingContext.ParseResult.GetValueForOption(DocumentStore),
+            DocumentStoreRoot = bindingContext.ParseResult.GetValueForOption(DocumentStoreRoot),
             SpriteImages = bindingContext.ParseResult.GetValueForOption(SpriteImages),
             CabMapDir = bindingContext.ParseResult.GetValueForOption(CabMapDir),
             FallbackCabMap = bindingContext.ParseResult.GetValueForOption(FallbackCabMap),

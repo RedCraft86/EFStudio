@@ -108,13 +108,19 @@ namespace AnimeStudio.CLI
                     Environment.ExitCode = 1;
                     return;
                 }
+                if (o.DocumentStoreRoot != null && o.DocumentStore == null)
+                {
+                    throw new ArgumentException("--document_store_root requires --document_store.");
+                }
                 if (o.DocumentStore != null
                     && o.AssetExportType != ExportType.JSON
                     && o.SecondaryAssetExportType != ExportType.JSON
+                    && o.AssetExportType != ExportType.Raw
+                    && o.SecondaryAssetExportType != ExportType.Raw
                     && o.AssetExportType != ExportType.Convert
                     && o.SecondaryAssetExportType != ExportType.Convert)
                 {
-                    Console.Error.WriteLine("--document_store requires a JSON or Convert export target.");
+                    Console.Error.WriteLine("--document_store requires a JSON, Raw or Convert export target.");
                     Environment.ExitCode = 1;
                     return;
                 }
@@ -169,7 +175,7 @@ namespace AnimeStudio.CLI
                 );
                 using var rendererIndex = RendererIndexJsonlWriter.Open(o.RendererIndexJsonl, o.Input);
                 using var exportManifest = ExportManifestJsonlWriter.Open(o.ExportManifestJsonl, o.Output);
-                using var documentStore = UnityDocumentStoreWriter.Open(o.DocumentStore);
+                using var documentStore = UnityDocumentStoreWriter.Open(o.DocumentStore, root: o.DocumentStoreRoot);
                 using var spriteImages = SpriteImageCheck.Open(o.SpriteImages);
 
                 if (o.Key != default)
@@ -221,7 +227,7 @@ namespace AnimeStudio.CLI
                 managedReferenceDiagnostics?.Complete(indexComplete);
                 rendererIndex?.Complete(indexComplete);
                 exportManifest?.Complete(indexComplete);
-                documentStore?.Complete();
+                if (!exportHadErrors && Environment.ExitCode == 0) documentStore?.Complete();
                 spriteImages?.Complete();
                 if (Properties.Settings.Default.scrapeMonos)
                 {
@@ -386,10 +392,12 @@ namespace AnimeStudio.CLI
                 new ExportTarget(o.Output, o.AssetExportType, "primary", typeFilterPlan.PrimaryExportTypes)
             };
 
-            o.Output.Create();
+            if (o.DocumentStore == null || (o.AssetExportType != ExportType.JSON && o.AssetExportType != ExportType.Raw))
+                o.Output.Create();
             if (hasSecondaryExportType)
             {
-                o.SecondaryOutput.Create();
+                if (o.DocumentStore == null || (o.SecondaryAssetExportType != ExportType.JSON && o.SecondaryAssetExportType != ExportType.Raw))
+                    o.SecondaryOutput.Create();
                 exportTargets.Add(new ExportTarget(o.SecondaryOutput, o.SecondaryAssetExportType.Value, "secondary", typeFilterPlan.SecondaryExportTypes));
                 Logger.Info($"[SecondaryExport] Also exporting {o.SecondaryAssetExportType.Value} assets to {o.SecondaryOutput.FullName}");
             }

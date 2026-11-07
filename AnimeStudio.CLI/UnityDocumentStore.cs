@@ -14,14 +14,15 @@ using Newtonsoft.Json;
 namespace AnimeStudio.CLI
 {
     /// <summary>
-    /// Writes exported object documents (<c>.json</c>, <c>.anim</c>) into one
+    /// Writes exported object documents (<c>.json</c>, <c>.anim</c>, <c>.dat</c>) into one
     /// SQLite file instead of one loose file each (<c>--document_store</c>).
     ///
     /// The file is the wrapper's Unity object store format exactly
     /// (<c>scripts/game_data/unity_store.py</c>, schema
     /// <c>endfield.unity-object-store.v1</c>): one row per document keyed by its
     /// type folder (the parent directory of the path the file export would have
-    /// used) and its file name, holding the exact bytes the file export would
+    /// used), or its full relative folder with --document_store_root, and its
+    /// file name, holding the exact bytes the file export would
     /// have written, zlib-compressed, with their SHA256, and the indexed header
     /// columns <c>describe_document</c> derives from those bytes. The wrapper
     /// merges these staged stores into the export's <c>game/Unity.sqlite</c>
@@ -36,9 +37,9 @@ namespace AnimeStudio.CLI
     {
         public const string Schema = "endfield.unity-object-store.v1";
         private const int CommitEvery = 4096;
-        // Documents waiting to be hashed/compressed/inserted; bounds memory
-        // while letting compression overlap the export loop.
-        private const int QueueCapacity = 256;
+        // Prepared documents waiting for insertion. Keep the queue small so
+        // large raw objects cannot accumulate behind the SQLite writer.
+        private const int QueueCapacity = 8;
 
         // Verbatim from scripts/game_data/unity_store.py _SCHEMA_SQL.
         internal const string SchemaSql = @"
@@ -81,9 +82,9 @@ CREATE INDEX IF NOT EXISTS objects_script ON objects (script_path_id) WHERE scri
         private readonly object sync = new object();
         private readonly string finalPath;
         private readonly string partialPath;
-        // Hashing, header parsing and compression run on the thread pool; one
-        // writer thread consumes the results in submission order, so a later
-        // write to a name always lands after an earlier one.
+        private readonly string documentRoot;
+        // Producers prepare one document at a time. The bounded writer queue
+        // preserves submission order without spawning compression tasks.
         private readonly BlockingCollection<Task<Operation>> queue = new(QueueCapacity);
         private readonly Thread writerThread;
         private SqliteConnection connection;
@@ -96,8 +97,9 @@ CREATE INDEX IF NOT EXISTS objects_script ON objects (script_path_id) WHERE scri
         private volatile Exception failure;
         private bool completed;
 
-        private UnityDocumentStoreWriter(FileInfo store, string schema, bool current)
+        private UnityDocumentStoreWriter(FileInfo store, string schema, bool current, DirectoryInfo root = null)
         {
+            documentRoot = root == null ? null : Path.GetFullPath(root.FullName);
             finalPath = Path.GetFullPath(store.FullName);
             partialPath = finalPath + ".partial";
             var directory = Path.GetDirectoryName(finalPath);
@@ -151,11 +153,11 @@ CREATE INDEX IF NOT EXISTS objects_script ON objects (script_path_id) WHERE scri
         /// <summary>Rows inserted so far (a replaced name counts again).</summary>
         public long DocumentCount => Interlocked.Read(ref documentCount);
 
-        public static UnityDocumentStoreWriter Open(FileInfo store, string schema = Schema)
+        public static UnityDocumentStoreWriter Open(FileInfo store, string schema = Schema, DirectoryInfo root = null)
         {
             if (store == null) return null;
             if (Current != null) throw new InvalidOperationException("A document store writer is already active.");
-            return new UnityDocumentStoreWriter(store, schema, current: true);
+            return new UnityDocumentStoreWriter(store, schema, current: true, root: root);
         }
 
         /// <summary>A second store of the same format that export routing never writes to; its owner calls <see cref="Put(string, string, byte[])"/>.</summary>
@@ -169,7 +171,7 @@ CREATE INDEX IF NOT EXISTS objects_script ON objects (script_path_id) WHERE scri
         public static bool IsDocumentName(string name)
         {
             var lower = (name ?? "").ToLowerInvariant();
-            return lower.EndsWith(".json", StringComparison.Ordinal) || lower.EndsWith(".anim", StringComparison.Ordinal);
+            return lower.EndsWith(".json", StringComparison.Ordinal) || lower.EndsWith(".anim", StringComparison.Ordinal) || lower.EndsWith(".dat", StringComparison.Ordinal) || lower.EndsWith(".raw.bin", StringComparison.Ordinal);
         }
 
         /// <summary>The (type folder, file name) row key of an export path.</summary>
@@ -180,11 +182,22 @@ CREATE INDEX IF NOT EXISTS objects_script ON objects (script_path_id) WHERE scri
             return (type, name);
         }
 
+        private (string Type, string Name) DocumentKey(string exportFullPath)
+        {
+            if (documentRoot == null) return KeyOf(exportFullPath);
+            var relative = Path.GetRelativePath(documentRoot, Path.GetFullPath(exportFullPath));
+            if (Path.IsPathRooted(relative) || relative == ".."
+                || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                throw new InvalidOperationException($"Document output escapes the selected root: {exportFullPath}");
+            var folder = Path.GetDirectoryName(relative) ?? "";
+            return (folder.Replace(Path.DirectorySeparatorChar, '/'), Path.GetFileName(relative));
+        }
+
         /// <summary>Store one document's exact bytes. The caller must not modify <paramref name="data"/> afterwards.</summary>
         public void Put(string exportFullPath, byte[] data)
         {
             if (data == null) throw new ArgumentNullException(nameof(data));
-            var (type, name) = KeyOf(exportFullPath);
+            var (type, name) = DocumentKey(exportFullPath);
             Put(type, name, data);
         }
 
@@ -193,20 +206,20 @@ CREATE INDEX IF NOT EXISTS objects_script ON objects (script_path_id) WHERE scri
         {
             if (data == null) throw new ArgumentNullException(nameof(data));
             var mtimeNs = (DateTime.UtcNow.Ticks - DateTime.UnixEpoch.Ticks) * 100L;
-            Submit(Task.Run(() => Prepare(type, name, data, mtimeNs)));
+            Submit(Task.FromResult(Prepare(type, name, data, mtimeNs)));
         }
 
         /// <summary>Drop a claimed name's previous row, as a file export deletes the previous file.</summary>
         public void Remove(string exportFullPath)
         {
-            var (type, name) = KeyOf(exportFullPath);
+            var (type, name) = DocumentKey(exportFullPath);
             Submit(Task.FromResult(new Operation { Kind = OperationKind.Remove, Type = type, Name = name }));
         }
 
         /// <summary>Whether a row exists once every earlier operation has been applied.</summary>
         public bool Contains(string exportFullPath)
         {
-            var (type, name) = KeyOf(exportFullPath);
+            var (type, name) = DocumentKey(exportFullPath);
             var answer = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             Submit(Task.FromResult(new Operation { Kind = OperationKind.Contains, Type = type, Name = name, Answer = answer }));
             return answer.Task.GetAwaiter().GetResult();

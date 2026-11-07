@@ -549,9 +549,9 @@ namespace AnimeStudio.CLI
             int toExportCount = uniqueExportAssets.Count;
             int exportedCount = 0;
             int errorCount = 0;
-            // --document_store routes .json/.anim documents for JSON and Convert
-            // targets into the store; media and Raw/Dump outputs stay on disk.
-            using var documentRoute = DocumentOutput.Route(exportType == ExportType.JSON || exportType == ExportType.Convert);
+            // --document_store routes JSON/Raw documents and Convert metadata
+            // directly into SQLite. Converted media uses its normal output path.
+            using var documentRoute = DocumentOutput.Route(exportType == ExportType.JSON || exportType == ExportType.Convert || exportType == ExportType.Raw);
             foreach (var asset in uniqueExportAssets)
             {
                 string exportPath;

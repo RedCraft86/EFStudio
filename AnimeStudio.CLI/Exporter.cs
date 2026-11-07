@@ -21770,8 +21770,8 @@ namespace AnimeStudio.CLI
             }
 
             var sidecarPath = Path.ChangeExtension(exportFullPath, ".raw.bin");
-            DocumentOutput.EnsureDirectoryFor(sidecarPath);
-            File.WriteAllBytes(sidecarPath, rawData);
+            if (!DocumentOutput.Routes(sidecarPath)) DocumentOutput.EnsureDirectoryFor(sidecarPath);
+            DocumentOutput.WriteAllBytes(sidecarPath, rawData);
             return Path.GetFileName(sidecarPath);
         }
 

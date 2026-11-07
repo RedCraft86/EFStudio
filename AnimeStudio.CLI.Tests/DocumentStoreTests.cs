@@ -16,6 +16,7 @@ internal static class DocumentStoreTests
 
     public static void Run()
     {
+        TestRelativeJsonRawPairs();
         TestStoreRowsMatchTheFileExport();
         TestClaimCreatesNoFilesAndReplacesDuplicates();
         TestFileModeIsUnchanged();
@@ -25,6 +26,45 @@ internal static class DocumentStoreTests
         TestPackedGameFileRows();
         TestDetachedStoreIsNotRoutedAndKeepsMeta();
         TestDescribeDocumentPort();
+    }
+
+    private static void TestRelativeJsonRawPairs()
+    {
+        var root = NewTempDirectory();
+        var output = Path.Combine(root, "output");
+        var path = Path.Combine(root, "objects.sqlite");
+        using (var store = UnityDocumentStoreWriter.Open(new FileInfo(path), root: new DirectoryInfo(output))!)
+        using (DocumentOutput.Route(true))
+        {
+            foreach (var source in new[] { "first", "second" })
+            {
+                var json = Path.Combine(output, "json", source, "CAB-same", "object.json");
+                var raw = Path.Combine(output, "raw", source, "CAB-same", "object.dat");
+                DocumentOutput.WriteAllText(json, "{}");
+                DocumentOutput.WriteAllBytes(raw, new byte[] { 0, 255, 1 });
+                Assert(store.Contains(json) && store.Contains(raw), "both direct rows exist");
+            }
+            var refused = false;
+            try { DocumentOutput.WriteAllBytes(Path.Combine(root, "outside.dat"), new byte[] { 1 }); }
+            catch (InvalidOperationException) { refused = true; }
+            Assert(refused, "root escape is rejected");
+            store.Complete();
+        }
+        Assert(!Directory.Exists(output), "paired export creates no loose folders");
+        using var connection = OpenReadOnly(path);
+        AssertEqual("4", Scalar(connection, "SELECT COUNT(*) FROM objects"), "same CAB/name in distinct sources stays distinct");
+        AssertEqual("2", Scalar(connection, "SELECT COUNT(*) FROM objects WHERE type LIKE 'raw/%' AND size=3"), "raw rows contain exact bytes");
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT data, sha256 FROM objects WHERE type LIKE 'raw/%'";
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var expected = new byte[] { 0, 255, 1 };
+            AssertBytes(expected, Inflate((byte[])reader[0]), "direct raw byte parity");
+            AssertEqual(Convert.ToHexString(SHA256.HashData(expected)).ToLowerInvariant(),
+                reader.GetString(1).ToLowerInvariant(), "direct raw SHA256");
+        }
+
     }
 
     /// <summary>`document-store-fixture OUT`: edge-case documents for the Python describe_document parity test.</summary>

@@ -12,6 +12,12 @@ static class Program
 {
     private static int Main(string[] args)
     {
+        if (args.Length == 1 && args[0] == "document-store")
+        {
+            DocumentStoreTests.Run();
+            Console.WriteLine("Document store fixtures passed");
+            return 0;
+        }
         if (args.Length == 1 && args[0] == "spark-buffer")
         {
             EndfieldSparkBufferTests.Run();
