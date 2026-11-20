@@ -42,9 +42,9 @@ namespace AnimeStudio.CLI
                 Console.WriteLine($"  Done: audited {result.FileCount} files across {result.ChunkCount} chunks and {result.BlockCount} catalog entries");
                 if (result.FailureCount > 0)
                 {
-                    foreach (var diagnostic in result.Diagnostics)
+                    foreach (var diagnostic in result.StructuredDiagnostics)
                     {
-                        Console.Error.WriteLine($"Error: vfs-audit: {diagnostic}");
+                        Console.Error.WriteLine($"Error: vfs-audit: {DescribeDiagnostic(diagnostic)}");
                     }
                     var suffix = result.FailureCount > result.Diagnostics.Count
                         ? $"; {result.FailureCount - result.Diagnostics.Count} additional failures omitted"
@@ -236,6 +236,7 @@ namespace AnimeStudio.CLI
                 ["failureCount"] = result.FailureCount,
                 ["excludedBlockCount"] = result.ExcludedBlockCount,
                 ["missingBlockCount"] = result.MissingBlockCount,
+                ["notInstalledBlockCount"] = result.NotInstalledBlockCount,
                 ["shadowedFallbackFileCount"] = result.ShadowedFallbackCount,
                 ["physicalChunkFileCount"] = result.PhysicalChunkInventory.Count,
                 ["referencedPhysicalChunkFileCount"] = result.ReferencedPhysicalChunks.Count,
@@ -300,12 +301,13 @@ namespace AnimeStudio.CLI
                 or (byte)EndfieldVfsBlockType.AudioJapanese
                 or (byte)EndfieldVfsBlockType.AudioKorean;
             var excludedStatus = excludedVoice ? "excluded_missing_voice" : "excluded_missing_audio";
+            var notInstalled = IsNotInstalled(entry);
             var metadata = new JObject
             {
                 ["recordType"] = "block",
                 ["inputSetSha256"] = result.InputSetSha256,
-                ["status"] = excluded ? excludedStatus : StateName(entry.State),
-                ["boundaryStatus"] = excluded ? "excluded" : "not_verified",
+                ["status"] = excluded ? excludedStatus : notInstalled ? "not_installed" : StateName(entry.State),
+                ["boundaryStatus"] = excluded ? "excluded" : notInstalled ? "not_installed" : "not_verified",
                 ["overlayState"] = StateName(entry.State),
                 ["blockName"] = blockName,
                 ["blockTypeValue"] = rawType.HasValue ? rawType.Value : JValue.CreateNull(),
@@ -324,7 +326,7 @@ namespace AnimeStudio.CLI
                 ["metadataCrc32Recomputed"] = info == null ? JValue.CreateNull() : $"{info.MetadataCrc32Recomputed:X8}",
                 ["primaryIdentity"] = MetadataIdentity(entry.PrimaryInfo, entry.PrimaryMetadataPath),
                 ["fallbackIdentity"] = MetadataIdentity(entry.FallbackInfo, entry.FallbackMetadataPath),
-                ["diagnostic"] = entry.State == EndfieldVfsCatalogState.MissingMetadata
+                ["diagnostic"] = entry.State == EndfieldVfsCatalogState.MissingMetadata && !notInstalled
                     ? Diagnostic("missing_metadata", blockName, null, null, null, null, null,
                         entry.PrimaryError ?? entry.FallbackError ?? "metadata unavailable")
                     : JValue.CreateNull(),
@@ -381,6 +383,11 @@ namespace AnimeStudio.CLI
                             fallbackFiles, excludedStatus);
                     }
                 }
+                return;
+            }
+            if (notInstalled)
+            {
+                result.NotInstalledBlockCount++;
                 return;
             }
             if (entry.State == EndfieldVfsCatalogState.MissingMetadata)
@@ -1149,6 +1156,27 @@ namespace AnimeStudio.CLI
             return "missing_both";
         }
 
+        // A block whose hash directory exists in neither root is not installed
+        // by this client (the current build ships no Audit* groups, for
+        // example); it declares nothing, so it is recorded but not failed, and
+        // a consumer that requires it fails on its own missing inputs. A present
+        // directory with unreadable metadata still fails closed.
+        private static bool IsNotInstalled(EndfieldVfsCatalogEntry entry) =>
+            entry.State == EndfieldVfsCatalogState.MissingMetadata
+            && entry.CanonicalInfo == null
+            && !entry.PrimaryDirectoryPresent
+            && !entry.FallbackDirectoryPresent;
+
+        private static string DescribeDiagnostic(JToken diagnostic)
+        {
+            var block = (string)diagnostic["block"];
+            var root = (string)diagnostic["sourceRoot"];
+            var where = string.IsNullOrEmpty(root) ? block : $"{block} {root}";
+            return string.IsNullOrEmpty(where)
+                ? (string)diagnostic["message"]
+                : $"[{diagnostic["code"]}] {where}: {diagnostic["message"]}";
+        }
+
         private static string KnownName(EndfieldVfsLoader loader, string hash)
         {
             foreach (var blockType in EndfieldVfsBlockTypes.AllDumpable)
@@ -1358,6 +1386,7 @@ namespace AnimeStudio.CLI
             builder.AppendLine($"- Excluded: {result.ExcludedFileCount:N0}");
             builder.AppendLine($"- Failed: {result.FailedFileCount:N0}");
             builder.AppendLine($"- Conditionally excluded missing audio/LipSync blocks: {result.ExcludedBlockCount}");
+            builder.AppendLine($"- Blocks not installed in either root: {result.NotInstalledBlockCount}");
             builder.AppendLine($"- Failures: {result.FailureCount}");
             builder.AppendLine($"- All available files boundary verified: {(result.AvailableFileCount == result.BoundaryVerifiedCount ? "yes" : "no")}");
             builder.AppendLine($"- Full audit passed: {(result.FailureCount == 0 ? "yes" : "no")}");
@@ -1491,6 +1520,7 @@ namespace AnimeStudio.CLI
             public int FailureCount { get; set; }
             public int ExcludedBlockCount { get; set; }
             public int MissingBlockCount { get; set; }
+            public int NotInstalledBlockCount { get; set; }
             public long ShadowedFallbackCount { get; set; }
             public long CurrentDeclaredFileCount { get; set; }
             public long CurrentDeclaredChunkCount { get; set; }

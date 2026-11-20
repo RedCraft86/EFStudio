@@ -37,6 +37,19 @@ namespace AnimeStudio.CLI
                     blockInfo = loader.LoadBlockInfo(blockType);
                     pckFiles = ExtractPckFiles(blockInfo);
                 }
+                catch (EndfieldVfsBlockNotFoundException e)
+                {
+                    // A block with no directory in either root is not installed by
+                    // this client; it declares no package, so nothing is unverified.
+                    // A consumer that requires the block fails on its own inputs.
+                    rows.Add(new Dictionary<string, object?>
+                    {
+                        ["block"] = blockType.GetName(),
+                        ["status"] = "not_installed",
+                        ["diagnostic"] = BoundDiagnostic(e.Message),
+                    });
+                    continue;
+                }
                 catch (EndfieldVfsException e)
                 {
                     rows.Add(new Dictionary<string, object?>
@@ -641,6 +654,7 @@ namespace AnimeStudio.CLI
                     ["verified"] = rows.Count(x => Equals(x.GetValueOrDefault("status"), "verified")),
                     ["failures"] = failures,
                     ["missingBlocks"] = rows.Count(x => Equals(x.GetValueOrDefault("status"), "missing_block")),
+                    ["notInstalled"] = rows.Count(x => Equals(x.GetValueOrDefault("status"), "not_installed")),
                     ["excluded"] = rows.Count(x =>
                         x.GetValueOrDefault("status") is string status
                         && status.StartsWith("excluded_", StringComparison.Ordinal)),

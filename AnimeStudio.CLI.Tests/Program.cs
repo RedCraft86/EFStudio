@@ -1218,6 +1218,7 @@ static class Program
 
         TestEndfieldVfsAuditUnknownIdAndExcludedVoice();
         TestEndfieldVfsAuditMissingAuditAudioExclusion();
+        TestEndfieldVfsAuditUninstalledBlocks();
     }
 
     private static void TestEndfieldVfsAuditCurrentMetadataAndDeterminism()
@@ -1393,6 +1394,102 @@ static class Program
                 Directory.Delete(root, recursive: true);
             }
         }
+    }
+
+    // A client need not install every block (the current build ships no
+    // Audit* group). A block with no directory in either root is recorded as
+    // not installed; a block directory whose metadata is unreadable still
+    // fails the audit.
+    private static void TestEndfieldVfsAuditUninstalledBlocks()
+    {
+        var absent = new HashSet<EndfieldVfsBlockType>
+        {
+            EndfieldVfsBlockType.AuditStreaming,
+            EndfieldVfsBlockType.AuditDynamicStreaming,
+            EndfieldVfsBlockType.AuditIV,
+            EndfieldVfsBlockType.AuditAudio,
+            EndfieldVfsBlockType.AuditVideo,
+            EndfieldVfsBlockType.Table,
+        };
+
+        void WithCatalog(string name, Func<EndfieldVfsBlockType, bool> include, Action<string> body)
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"animestudio-vfs-audit-{name}-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            try
+            {
+                foreach (var blockType in EndfieldVfsBlockTypes.AllDumpable.Where(include))
+                {
+                    WriteAuditMetadata(root, blockType,
+                        BuildAuditMetadata(blockType, writer => writer.Write(0)));
+                }
+                body(root);
+            }
+            finally
+            {
+                if (Directory.Exists(root))
+                    Directory.Delete(root, recursive: true);
+            }
+        }
+
+        WithCatalog("uninstalled", type => !absent.Contains(type), root =>
+        {
+            var artifacts = RunAudit(root, "uninstalled", fallback: null, expectSuccess: true);
+            var summary = File.ReadAllText(artifacts.Summary);
+            var ledger = ReadGzipText(artifacts.Ledger);
+            if (!summary.Contains("\"failureCount\": 0", StringComparison.Ordinal)
+                || !summary.Contains($"\"notInstalledBlockCount\": {absent.Count}", StringComparison.Ordinal)
+                || !summary.Contains("\"missingBlockCount\": 0", StringComparison.Ordinal)
+                || !summary.Contains("\"fullAuditPassed\": true", StringComparison.Ordinal)
+                || CountOccurrences(ledger, "\"boundaryStatus\":\"not_installed\"") != absent.Count)
+            {
+                throw new InvalidOperationException("uninstalled blocks did not pass as not-installed rows");
+            }
+            AssertAuditPublished(artifacts, "uninstalled blocks");
+        });
+
+        WithCatalog("empty-block-dir", type => type != EndfieldVfsBlockType.AuditVideo, root =>
+        {
+            var hash = EndfieldVfsHash.VfsBlockHash(EndfieldVfsBlockType.AuditVideo.GetName(), EndfieldVfsKeys.UnityHashSecret);
+            Directory.CreateDirectory(Path.Combine(root, "VFS", hash));
+            var artifacts = RunAudit(root, "empty-block-dir", fallback: null, expectSuccess: false);
+            var summary = File.ReadAllText(artifacts.Summary);
+            if (!summary.Contains("\"notInstalledBlockCount\": 0", StringComparison.Ordinal)
+                || !summary.Contains("\"missingBlockCount\": 1", StringComparison.Ordinal)
+                || !summary.Contains("\"block\": \"AuditVideo\"", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("a block directory without metadata did not fail the audit by name");
+            }
+        });
+
+        // Every audio block absent: each is a not-installed row, none a failure.
+        WithCatalog("audio-uninstalled", type => !absent.Contains(type) && !type.GetName().Contains("Audio", StringComparison.Ordinal), root =>
+        {
+            var output = Path.Combine(root, "audio-audit.json");
+            var exit = EndfieldAudioCli.RunAudit(new[]
+            {
+                "audio-audit", "--streaming-assets", root,
+                "--hirc-only", "--output", output,
+            });
+            var report = File.ReadAllText(output);
+            if (exit != 0
+                || CountOccurrences(report, "\"status\": \"not_installed\"") != 8
+                || !report.Contains("\"notInstalled\": 8", StringComparison.Ordinal)
+                || !report.Contains("\"missingBlocks\": 0", StringComparison.Ordinal)
+                || !report.Contains("\"failures\": 0", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"audio-audit did not record uninstalled blocks: exit={exit} report={report}");
+            }
+        });
+    }
+
+    private static int CountOccurrences(string text, string value)
+    {
+        var count = 0;
+        for (var index = text.IndexOf(value, StringComparison.Ordinal); index >= 0;
+             index = text.IndexOf(value, index + value.Length, StringComparison.Ordinal))
+            count++;
+        return count;
     }
 
     private static void TestEndfieldAudioAuditConditionalMissing()
